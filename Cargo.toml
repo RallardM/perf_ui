@@ -74,8 +74,9 @@ name = "toggle"
 path = "examples/toggle.rs"
 
 [dependencies.bevy]
-version = "0.18"
+# version = "0.18"
 path = "../bevy/"
+
 features = [
     "bevy_log",
     "bevy_ui",
@@ -92,6 +93,6 @@ default-features = false
 version = "0.2.19"
 
 [dev-dependencies.bevy]
-version = "0.18"
+# version = "0.18"
 path = "../bevy/"
 
