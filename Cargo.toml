@@ -1,32 +1,97 @@
 [package]
+edition = "2024"
 name = "bevy_perf_ui"
 version = "0.6.0"
 authors = ["Ida 'Iyes', Oleks Pickle <22867443+olekspickle@users.noreply.github.com>"]
-edition = "2024"
-license = "MIT OR Apache-2.0"
-readme = "README.md"
-repository = "https://github.com/olekspickle/bevy_perf_ui"
-homepage = "https://github.com/olekspickle/bevy_perf_ui"
-keywords = ["gamedev", "bevy"]
-categories = ["game-engines"]
+build = false
+exclude = [
+    "assets/*",
+    "screenshots/*",
+]
+# autolib = false
+# autobins = false
+# autoexamples = false
+# autotests = false
+# autobenches = false
 description = "Customizable Performance/Debug Overlay for Bevy UI"
-exclude = ["assets/*", "screenshots/*"]
+homepage = "https://github.com/olekspickle/bevy_perf_ui"
+readme = "README.md"
+keywords = [
+    "gamedev",
+    "bevy",
+]
+categories = ["game-engines"]
+license = "MIT OR Apache-2.0"
+repository = "https://github.com/olekspickle/bevy_perf_ui"
 
 [features]
-default = [ "entries", "widgets", "sysinfo", "chrono", "window" ]
-# Enable the collection of built-in Perf UI Entries
-entries = []
-# Enable the collection of additional built-in Perf UI Widgets
-widgets = []
-sysinfo = ["bevy/sysinfo_plugin", "bevy/multi_threaded"]
-window = ["bevy/bevy_window"]
-# Enable optional `chrono` dependency for timezone support in the Clock entry
 chrono = ["dep:chrono"]
+default = [
+    "entries",
+    "widgets",
+    "sysinfo",
+    "chrono",
+    "window",
+]
+entries = []
+sysinfo = [
+    "bevy/sysinfo_plugin",
+    "bevy/multi_threaded",
+]
+widgets = []
+window = ["bevy/bevy_window"]
 
-[dependencies]
-num-traits = "0.2.19"
-bevy = {  path = "../bevy/", default-features = false, features = ["bevy_log", "bevy_ui"] }
-chrono = { version = "0.4.40", optional = true, default-features = false, features = ["clock"] }
+[lib]
+name = "bevy_perf_ui"
+path = "src/lib.rs"
 
-[dev-dependencies]
-bevy = { path = "../bevy/" }
+[[example]]
+name = "custom"
+path = "examples/custom.rs"
+
+[[example]]
+name = "custom_minimal"
+path = "examples/custom_minimal.rs"
+
+[[example]]
+name = "fps_minimalist"
+path = "examples/fps_minimalist.rs"
+
+[[example]]
+name = "settings"
+path = "examples/settings.rs"
+
+[[example]]
+name = "simple"
+path = "examples/simple.rs"
+
+[[example]]
+name = "specific_entries"
+path = "examples/specific_entries.rs"
+
+[[example]]
+name = "toggle"
+path = "examples/toggle.rs"
+
+[dependencies.bevy]
+version = "0.18"
+path = "../bevy/"
+features = [
+    "bevy_log",
+    "bevy_ui",
+]
+default-features = false
+
+[dependencies.chrono]
+version = "0.4.40"
+features = ["clock"]
+optional = true
+default-features = false
+
+[dependencies.num-traits]
+version = "0.2.19"
+
+[dev-dependencies.bevy]
+version = "0.18"
+path = "../bevy/"
+
