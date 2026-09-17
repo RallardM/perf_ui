@@ -47,7 +47,7 @@ pub struct TimeSinceLastClick {
 }
 
 /// Custom Perf UI entry to show the time since the last mouse click
-#[derive(Component, Default)]
+#[derive(Component, Clone, Default)]
 pub struct PerfUiTimeSinceLastClick;
 
 // Implement the trait for integration into the Perf UI

@@ -4,6 +4,7 @@
 //! and what manages the UI for all your entries.
 
 use bevy::prelude::*;
+use egui::Align2;
 
 /// Which corner of the screen to display the Perf UI at?
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq, Hash)]
@@ -37,9 +38,6 @@ pub enum PerfUiPosition {
 ///     /// ...
 /// ));
 /// ```
-///
-/// We will automatically detect that you have added these components
-/// and will do the rest of the setup to spawn the UI. :)
 #[derive(Component, Debug, Clone)]
 pub struct PerfUiRoot {
     /// The color to use for the background of the Perf UI.
@@ -79,12 +77,6 @@ pub struct PerfUiRoot {
     ///
     /// Default: WHITE
     pub label_color: Color,
-    /// The font to use for labels.
-    pub font_label: Handle<Font>,
-    /// The font to use for values.
-    pub font_value: Handle<Font>,
-    /// The font to use for highlighted values.
-    pub font_highlight: Handle<Font>,
     /// The font size for labels.
     ///
     /// Default: `12.0`
@@ -93,10 +85,6 @@ pub struct PerfUiRoot {
     ///
     /// Default: `12.0`
     pub fontsize_value: f32,
-    /// The ZIndex of the UI.
-    ///
-    /// Default: `i32::MAX` (display on top of all other UI)
-    pub z_index: GlobalZIndex,
     /// The position of the UI.
     ///
     /// Default: top-right corner
@@ -121,6 +109,29 @@ pub struct PerfUiRoot {
     ///
     /// Default: `128.0`
     pub values_col_width: f32,
+    /// Z-index for drawing the Perf UI on top of other UI.
+    ///
+    /// Roots with larger values are drawn later / on top.
+    /// Only meaningful relative to other `PerfUiRoot`s of the same
+    /// egui context (window).
+    ///
+    /// Default: `0`
+    pub z_index: i32,
+    /// The font to use for labels.
+    ///
+    /// Loaded automatically: once the font asset is loaded, it is registered
+    /// into egui's font definitions and used for rendering.
+    /// Until then (or if the asset is not available), egui's default font is
+    /// used.
+    pub font_label: Handle<Font>,
+    /// The font to use for values.
+    ///
+    /// See [`Self::font_label`] for details on automatic loading/registration.
+    pub font_value: Handle<Font>,
+    /// The font to use for highlighted values.
+    ///
+    /// See [`Self::font_label`] for details on automatic loading/registration.
+    pub font_highlight: Handle<Font>,
 }
 
 impl Default for PerfUiRoot {
@@ -135,100 +146,29 @@ impl Default for PerfUiRoot {
             err_color: Color::srgb(0.5, 0.5, 0.5),
             default_value_color: Color::srgb(0.75, 0.75, 0.75),
             label_color: Color::srgb(1.0, 1.0, 1.0),
-            font_label: default(),
-            font_value: default(),
-            font_highlight: default(),
             fontsize_label: 12.0,
             fontsize_value: 12.0,
-            z_index: GlobalZIndex(i32::MAX),
             position: default(),
             margin: 16.0,
             padding: 2.0,
             inner_margin: 0.0,
             inner_padding: 0.0,
             values_col_width: 128.0,
+            z_index: 0,
+            font_label: Handle::default(),
+            font_value: Handle::default(),
+            font_highlight: Handle::default(),
         }
     }
 }
 
-impl PerfUiPosition {
-    fn top(self, margin: f32) -> Val {
-        match self {
-            PerfUiPosition::TopLeft | PerfUiPosition::TopRight => Val::Px(margin),
-            PerfUiPosition::BottomLeft | PerfUiPosition::BottomRight => Val::Auto,
-        }
-    }
-    fn bottom(self, margin: f32) -> Val {
-        match self {
-            PerfUiPosition::BottomLeft | PerfUiPosition::BottomRight => Val::Px(margin),
-            PerfUiPosition::TopLeft | PerfUiPosition::TopRight => Val::Auto,
-        }
-    }
-    fn left(self, margin: f32) -> Val {
-        match self {
-            PerfUiPosition::TopLeft | PerfUiPosition::BottomLeft => Val::Px(margin),
-            PerfUiPosition::TopRight | PerfUiPosition::BottomRight => Val::Auto,
-        }
-    }
-    fn right(self, margin: f32) -> Val {
-        match self {
-            PerfUiPosition::TopRight | PerfUiPosition::BottomRight => Val::Px(margin),
-            PerfUiPosition::TopLeft | PerfUiPosition::BottomLeft => Val::Auto,
-        }
-    }
-}
-
-pub(crate) fn rc_setup_perf_ui(q: Query<(), Changed<PerfUiRoot>>) -> bool {
-    !q.is_empty()
-}
-
-pub(crate) fn setup_perf_ui(
-    mut commands: Commands,
-    fonts: Res<Assets<Font>>,
-    mut q_root: Query<
-        (
-            Entity,
-            &PerfUiRoot,
-            Option<&mut BackgroundColor>,
-            Option<&mut Node>,
-        ),
-        Changed<PerfUiRoot>,
-    >,
-) {
-    for (e, perf_ui, background, style) in &mut q_root {
-        if (perf_ui.font_label == Handle::default()
-            || perf_ui.font_value == Handle::default()
-            || perf_ui.font_highlight == Handle::default())
-            && !fonts.contains(&Handle::default())
-        {
-            error!(
-                "Bevy's default font is missing. Either enable Bevy's `default_font` cargo feature, or specify custom fonts in `PerfUiRoot`."
-            );
-        }
-        let new_style = Node {
-            position_type: PositionType::Absolute,
-            top: perf_ui.position.top(perf_ui.margin),
-            bottom: perf_ui.position.bottom(perf_ui.margin),
-            left: perf_ui.position.left(perf_ui.margin),
-            right: perf_ui.position.right(perf_ui.margin),
-            flex_direction: if perf_ui.layout_horizontal {
-                FlexDirection::Row
-            } else {
-                FlexDirection::Column
-            },
-            align_items: AlignItems::Stretch,
-            padding: UiRect::all(Val::Px(perf_ui.padding)),
-            ..default()
-        };
-        if let (Some(mut background), Some(mut style)) = (background, style) {
-            background.0 = perf_ui.background_color;
-            *style = new_style;
-        } else {
-            commands.entity(e).insert((
-                Name::new("PerfUi"),
-                BackgroundColor(perf_ui.background_color),
-                new_style,
-            ));
+impl PerfUiRoot {
+    pub(crate) fn egui_anchor(&self) -> Align2 {
+        match self.position {
+            PerfUiPosition::TopLeft => Align2::LEFT_TOP,
+            PerfUiPosition::TopRight => Align2::RIGHT_TOP,
+            PerfUiPosition::BottomLeft => Align2::LEFT_BOTTOM,
+            PerfUiPosition::BottomRight => Align2::RIGHT_BOTTOM,
         }
     }
 }

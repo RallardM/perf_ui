@@ -1,294 +1,319 @@
-//! Framework for creating different widgets for displaying Perf UI entries.
+//! Framework for creating different widgets for displaying Perf UI entries using egui.
 
-use std::marker::PhantomData;
+use bevy::ecs::system::SystemParam;
+use bevy::prelude::*;
 
 use crate::entry::PerfUiEntry;
 use crate::ui::root::PerfUiRoot;
-use bevy::ecs::system::StaticSystemParam;
-use bevy::ecs::system::SystemParam;
-use bevy::ecs::system::lifetimeless::SQuery;
-use bevy::prelude::*;
+use crate::utils::to_egui_color;
 
-use super::PerfUiSortKey;
+/// Extra empty space around the label text inside the label wrapper (in pixels).
+/// Mirrors the padding of the original (bevy_ui-based) implementation.
+pub const LABEL_PADDING: f32 = 4.0;
+/// Extra empty space around the value inside the values column (in pixels).
+/// Mirrors the padding of the original (bevy_ui-based) implementation.
+pub const VALUE_PADDING: f32 = 4.0;
 
-/// Trait for Perf UI Widgets.
-pub trait PerfUiWidget<T: PerfUiEntry>: Component {
-    /// Any extra system parameters you need to setup the UI.
-    type SystemParamSpawn: SystemParam + 'static;
-    /// Any system parameters you need to update the UI.
-    type SystemParamUpdate: SystemParam + 'static;
-
-    /// Spawn the UI hierarchy for this entry.
-    ///
-    /// You may spawn either:
-    ///  - A single UI Node entity
-    ///  - A UI Node entity with children under it
-    ///
-    /// In either case, this method must return the newly spawned `Entity`.
-    ///
-    /// You should *not* spawn additional entities that are not children
-    /// of the entity you return from this method.
-    ///
-    /// After this method is called, a `PerfUiWidgetMarker<T>` will
-    /// automatically be inserted on your entity. This allows it to be
-    /// tracked in the future (for despawning, etc.).
-    ///
-    /// You are given access to your widget component (`self`), the
-    /// root ui configuration component (`root`), the entity ID of the
-    /// root entity (`e_root`), in case you need them.
-    ///
-    /// If you need any additional data, you can put Bevy system parameters
-    /// into `type SystemParamSpawn` and access them via `param`.
-    ///
-    /// Use the provided `commands` for spawning your entities.
-    ///
-    /// Do not add yourself as a child of `e_root`! `bevy_perf_ui` will take
-    /// care of that for you!
-    fn spawn(
-        &self,
-        root: &PerfUiRoot,
-        e_root: Entity,
-        commands: &mut Commands,
-        param: &mut <Self::SystemParamSpawn as SystemParam>::Item<'_, '_>,
-    ) -> Entity;
-
-    /// Update the UI for the widget.
-    ///
-    /// You can use arbitrary Bevy system parameters to access the data
-    /// you need to update the UI. Put them in `type SystemParamUpdate`
-    /// and access them via `param`.
-    ///
-    /// You are given access to your widget component (`self`), the
-    /// root ui configuration component (`root`), the entity ID of the
-    /// root entity (`e_root`), and the entity ID of the widget entity
-    /// (`e_widget`, the one you returned from `spawn`), in case you need them.
-    fn update(
-        &self,
-        root: &PerfUiRoot,
-        e_root: Entity,
-        e_widget: Entity,
-        param: &mut <Self::SystemParamUpdate as SystemParam>::Item<'_, '_>,
-    );
-
-    /// The sort key of the entry that the widget is displaying.
-    fn sort_key(&self) -> i32;
-}
-
-/// Marker component to keep track of a widget's toplevel entity
-#[derive(Component)]
-pub struct PerfUiWidgetMarker<W> {
-    e_root: Entity,
-    _pd: PhantomData<W>,
-}
-
-pub(crate) fn rc_setup_perf_ui_widget<E: PerfUiEntry, W: PerfUiWidget<E>>(
-    q: Query<(), Or<(Changed<W>, Changed<PerfUiRoot>)>>,
-    removed: RemovedComponents<W>,
-) -> bool {
-    !q.is_empty() || !removed.is_empty()
-}
-
-pub(crate) fn setup_perf_ui_widget<E: PerfUiEntry, W: PerfUiWidget<E>>(
-    mut commands: Commands,
-    q_root: Query<(Entity, &PerfUiRoot, &W), Or<(Changed<W>, Changed<PerfUiRoot>)>>,
-    q_widget: Query<(Entity, &PerfUiWidgetMarker<W>)>,
-    mut removed: RemovedComponents<W>,
-    widget_param: StaticSystemParam<W::SystemParamSpawn>,
-) {
-    let mut widget_param = widget_param.into_inner();
-
-    // handle any removals:
-    // if the entry component was removed from a perf ui root entity,
-    // we need to find the entity of the entry's UI and despawn it.
-    for e_removed in removed.read() {
-        if let Some(e_entry) = q_widget
-            .iter()
-            .find(|(_, marker)| marker.e_root == e_removed)
-            .map(|(e, _)| e)
-        {
-            commands.entity(e_entry).despawn();
-        }
-    }
-    // handle any additions or reconfigurations:
-    // if an entry component was added/changed to a perf ui root entity,
-    // or if the ui root component itself was changed,
-    // find and despawn any existing entries and
-    // spawn a new UI hierarchy for the entry.
-    for (e_root, root, widget) in &q_root {
-        // despawn any old/existing UI hierarchy for relevant entries
-        if let Some(e_widget) = q_widget
-            .iter()
-            .find(|(_, marker)| marker.e_root == e_root)
-            .map(|(e, _)| e)
-        {
-            commands.entity(e_widget).despawn();
-        }
-
-        let e_widget = widget.spawn(root, e_root, &mut commands, &mut widget_param);
-        commands.entity(e_widget).insert((
-            PerfUiWidgetMarker::<W> {
-                e_root,
-                _pd: PhantomData,
-            },
-            PerfUiSortKey(widget.sort_key()),
-        ));
-        commands.entity(e_root).add_child(e_widget);
-    }
-}
-
-/// System that updates the values of Perf UI entries of a given type
+/// The registered egui font names corresponding to the custom fonts of a
+/// [`PerfUiRoot`].
 ///
-/// Exposed as `pub` so you can refer to it for ordering.
-#[allow(private_interfaces)]
-pub fn update_perf_ui_widget<E: PerfUiEntry, W: PerfUiWidget<E>>(
-    q_root: Query<(Entity, &PerfUiRoot, &W)>,
-    q_widget: Query<(Entity, &PerfUiWidgetMarker<W>)>,
-    widget_param: StaticSystemParam<W::SystemParamUpdate>,
-) {
-    let mut widget_param = widget_param.into_inner();
-    for (e_widget, marker) in &q_widget {
-        let Ok((e_root, root, widget)) = q_root.get(marker.e_root) else {
-            continue; // TODO: should we panic here?
-        };
-        widget.update(root, e_root, e_widget, &mut widget_param);
-    }
+/// When a [`Handle<Font>`] configured in the [`PerfUiRoot`] has been loaded
+/// and registered into egui's font definitions (which [`crate::PerfUiPlugin`]
+/// does automatically), the corresponding egui font name is used for the text.
+/// If a font is not (yet) registered/loaded, the default proportional font is
+/// used instead.
+#[derive(Debug, Clone, Default)]
+pub struct PerfUiRowFonts {
+    /// Registered egui font name for `PerfUiRoot::font_label`, if any.
+    pub label: Option<String>,
+    /// Registered egui font name for `PerfUiRoot::font_value`, if any.
+    pub value: Option<String>,
+    /// Registered egui font name for `PerfUiRoot::font_highlight`, if any.
+    pub highlight: Option<String>,
 }
 
-#[doc(hidden)]
-#[derive(Component)]
-pub struct SimpleWidgetTextMarker<E: PerfUiEntry> {
-    _pd: PhantomData<E>,
-}
-
-impl<E: PerfUiEntry> PerfUiWidget<E> for E {
-    type SystemParamSpawn = ();
-    type SystemParamUpdate = (
-        <E as PerfUiEntry>::SystemParam,
-        SQuery<&'static mut BackgroundColor, With<PerfUiWidgetMarker<E>>>,
-        SQuery<
-            (
-                &'static mut Text,
-                &'static mut TextColor,
-                &'static mut TextFont,
-            ),
-            With<SimpleWidgetTextMarker<E>>,
-        >,
-    );
-
-    fn spawn(
-        &self,
-        root: &crate::prelude::PerfUiRoot,
-        _e_root: Entity,
-        commands: &mut Commands,
-        _: &mut <Self::SystemParamSpawn as SystemParam>::Item<'_, '_>,
-    ) -> Entity {
-        let e_widget = commands
-            .spawn((
-                BackgroundColor(root.inner_background_color),
-                Node {
-                    flex_direction: FlexDirection::Row,
-                    justify_content: JustifyContent::SpaceBetween,
-                    align_items: AlignItems::Center,
-                    margin: UiRect::all(Val::Px(root.inner_margin)),
-                    padding: UiRect::all(Val::Px(root.inner_padding)),
-                    ..default()
-                },
-            ))
-            .id();
-        if root.display_labels {
-            let e_label_wrapper = commands
-                .spawn((Node {
-                    padding: UiRect::all(Val::Px(4.0)),
-                    ..default()
-                },))
-                .id();
-            let e_label = commands
-                .spawn((
-                    Text(format!("{}: ", self.label())),
-                    TextColor(root.label_color),
-                    TextFont {
-                        font: root.font_label.clone().into(),
-                        font_size: FontSize::Px(root.fontsize_label),
-                        ..default()
-                    },
-                    TextLayout {
-                        linebreak: LineBreak::NoWrap,
-                        justify: Justify::Left,
-                    },
-                ))
-                .id();
-            commands.entity(e_label_wrapper).add_child(e_label);
-            commands.entity(e_widget).add_child(e_label_wrapper);
-        }
-        let e_text_wrapper = commands
-            .spawn((Node {
-                padding: UiRect::all(Val::Px(4.0)),
-                width: Val::Px(root.values_col_width),
-                justify_content: JustifyContent::FlexEnd,
-                ..default()
-            },))
-            .id();
-        let e_text = commands
-            .spawn((
-                SimpleWidgetTextMarker::<E> { _pd: PhantomData },
-                Text(root.text_err.clone()),
-                TextFont {
-                    font: root.font_value.clone().into(),
-                    font_size: FontSize::Px(root.fontsize_value),
-                    ..default()
-                },
-                TextColor(root.err_color),
-                TextLayout {
-                    linebreak: LineBreak::NoWrap,
-                    justify: Justify::Right,
-                },
-            ))
-            .id();
-        commands.entity(e_text_wrapper).add_child(e_text);
-        commands.entity(e_widget).add_child(e_text_wrapper);
-        e_widget
-    }
-
-    fn update(
-        &self,
-        root: &crate::prelude::PerfUiRoot,
-        _e_root: Entity,
-        e_widget: Entity,
-        (entry_param, q_widget, q_text): &mut <Self::SystemParamUpdate as SystemParam>::Item<
-            '_,
-            '_,
-        >,
-    ) {
-        for (mut text, mut color, mut font) in q_text.iter_mut() {
-            let mut entry_highlight = false;
-            if let Some(value) = self.update_value(entry_param) {
-                let new_color = self.value_color(&value).unwrap_or(root.default_value_color);
-                let s = self.format_value(&value);
-                *text = Text(s);
-                *color = TextColor(new_color);
-                if self.value_highlight(&value) {
-                    font.font = root.font_highlight.clone().into();
-                    entry_highlight = true;
-                } else {
-                    font.font = root.font_value.clone().into();
-                }
-            } else {
-                let s = root.text_err.clone();
-                *text = Text(s);
-                *color = TextColor(root.err_color);
-                font.font = root.font_value.clone().into();
-            }
-            if let Ok(mut entry_bgcolor) = q_widget.get_mut(e_widget) {
-                if entry_highlight {
-                    entry_bgcolor.0 = root.inner_background_color_highlight;
-                } else {
-                    entry_bgcolor.0 = root.inner_background_color;
-                }
-            }
+impl PerfUiRowFonts {
+    /// The egui [`egui::FontId`] for label text.
+    pub fn label_font_id(&self, size: f32) -> egui::FontId {
+        match &self.label {
+            Some(name) => egui::FontId::new(size, egui::FontFamily::Name(name.clone().into())),
+            None => egui::FontId::proportional(size),
         }
     }
 
+    /// The egui [`egui::FontId`] for value text.
+    ///
+    /// If `highlight` is true and a highlight font is registered, it is used.
+    pub fn value_font_id(&self, size: f32, highlight: bool) -> egui::FontId {
+        if highlight {
+            if let Some(name) = &self.highlight {
+                return egui::FontId::new(size, egui::FontFamily::Name(name.clone().into()));
+            }
+        }
+        match &self.value {
+            Some(name) => egui::FontId::new(size, egui::FontFamily::Name(name.clone().into())),
+            None => egui::FontId::proportional(size),
+        }
+    }
+}
+
+/// Layout context for a single widget row, prepared by the renderer.
+///
+/// The renderer measures the natural width of every widget row of a Perf UI
+/// (using font metrics), so that all rows end up exactly the same width
+/// (like in the original, bevy_ui-based implementation), and passes the
+/// resulting panel geometry down to the actual drawing code.
+pub struct PerfUiRowCtx<'a> {
+    /// Total content width for this row (the panel width).
+    ///
+    /// In horizontal layouts, this equals the row's own natural width.
+    pub content_width: f32,
+    /// The natural (minimum) width of this row, including the label part
+    /// and the (minimum) width of the values column.
+    pub natural: f32,
+    /// The registered egui fonts to use for the text of this row.
+    pub fonts: &'a PerfUiRowFonts,
+}
+
+impl PerfUiRowCtx<'_> {
+    /// The flex space that should be added before the value cluster,
+    /// to make this row reach the full panel width.
+    pub fn flex_pad(&self) -> f32 {
+        (self.content_width - self.natural).max(0.0)
+    }
+}
+
+/// Measure the width of a text string, without rendering it.
+pub fn measure_text(ui: &egui::Ui, text: &str, font_id: &egui::FontId) -> f32 {
+    ui.painter()
+        .layout_no_wrap(text.to_owned(), font_id.clone(), egui::Color32::WHITE)
+        .size()
+        .x
+}
+
+/// Draw one widget row: the row background ("strip"), the label part,
+/// and the value cluster (right-aligned within the values column).
+///
+/// This is the building-block for custom widgets: it reproduces the row
+/// geometry of the original (bevy_ui-based) implementation:
+/// `[padding][label][padding][flex space][values column]`
+///
+/// Use this inside [`PerfUiWidget::render`]: the provided `ui` is the
+/// parent layout (do not add anything else to it directly).
+pub fn perf_ui_row(
+    ui: &mut egui::Ui,
+    root: &PerfUiRoot,
+    row: &PerfUiRowCtx<'_>,
+    highlight: bool,
+    label: Option<&str>,
+    add_value_cluster: &mut dyn FnMut(&mut egui::Ui),
+) -> egui::Response {
+    let strip = if highlight {
+        root.inner_background_color_highlight
+    } else {
+        root.inner_background_color
+    };
+
+    let flex_pad = row.flex_pad();
+
+    egui::Frame::NONE
+        .fill(to_egui_color(strip))
+        .inner_margin(root.inner_padding)
+        .show(ui, |ui| {
+            ui.horizontal(|ui| {
+                if root.display_labels {
+                    if let Some(label) = label {
+                        ui.horizontal(|ui| {
+                            ui.add_space(LABEL_PADDING);
+                            ui.label(
+                                egui::RichText::new(format!("{label}:"))
+                                    .size(root.fontsize_label)
+                                    .color(to_egui_color(root.label_color))
+                                    .font(row.fonts.label_font_id(root.fontsize_label)),
+                            );
+                            ui.add_space(LABEL_PADDING);
+                        });
+                    }
+                }
+                ui.horizontal(|ui| {
+                    ui.add_space(flex_pad);
+                    add_value_cluster(ui);
+                })
+            })
+        })
+        .response
+}
+
+/// Trait for Perf UI widgets using egui.
+pub trait PerfUiWidget<E: PerfUiEntry>: Component + Clone + Send + Sync + 'static {
+    /// The per-frame data this widget needs to render.
+    type Data: Send + Sync + 'static;
+
+    /// The underlying entry used as this widget's data source.
+    fn entry(&self) -> &E;
+
+    /// Get the sort key for this widget.
     fn sort_key(&self) -> i32 {
-        PerfUiEntry::sort_key(self)
+        self.entry().sort_key()
+    }
+
+    /// Compute the data to display this frame.
+    fn make_data(
+        &self,
+        root: &PerfUiRoot,
+        param: &mut <E::SystemParam as SystemParam>::Item<'_, '_>,
+    ) -> Self::Data;
+
+    /// The natural width of this widget's row (including the label part
+    /// and the minimum width of the values column).
+    ///
+    /// The renderer uses this to size the whole panel, so that all rows share
+    /// the same width, like in the original (bevy_ui-based) implementation.
+    ///
+    /// - `fonts`: the registered egui fonts for this Perf UI.
+    /// - `cached`: a cached natural width, measured from the rows that were
+    ///   actually drawn in previous frames (if any).
+    /// - `measure`: a callback to measure the width of a text string with a
+    ///   given egui font.
+    ///
+    /// The default implementation just returns the cached value (or `0.0`):
+    /// custom widgets that use [`perf_ui_row`] can rely on the measured
+    /// widths of their actual drawing (the renderer caches the width of every
+    /// drawn row, and provides it as `cached` in subsequent frames).
+    fn natural_width(
+        &self,
+        root: &PerfUiRoot,
+        fonts: &PerfUiRowFonts,
+        data: &Self::Data,
+        cached: Option<f32>,
+        measure: &mut dyn FnMut(&str, &egui::FontId) -> f32,
+    ) -> f32 {
+        let _ = (root, fonts, data, measure);
+        cached.unwrap_or(0.0)
+    }
+
+    /// Render this widget using egui, as one row of its Perf UI panel.
+    ///
+    /// Returns the natural width of the rendered row (label + value cluster),
+    /// excluding the flex padding added to fill the panel width. Widgets
+    /// build their row using [`perf_ui_row`], and can simply call
+    /// [`row_natural_width`] on the result.
+    fn render(
+        &self,
+        root: &PerfUiRoot,
+        ui: &mut egui::Ui,
+        row: &PerfUiRowCtx<'_>,
+        data: &Self::Data,
+    ) -> f32;
+}
+
+/// Compute the natural width of a row that was drawn using [`perf_ui_row`],
+/// from the [`egui::Response`] of that call.
+pub fn row_natural_width(
+    response: &egui::Response,
+    root: &PerfUiRoot,
+    row: &PerfUiRowCtx<'_>,
+) -> f32 {
+    (response.rect.width() - 2.0 * root.inner_padding - row.flex_pad()).max(0.0)
+}
+
+/// Data used by the default/simple text-row widget.
+#[derive(Clone, Debug)]
+pub struct SimpleRowData {
+    /// The formatted value text.
+    pub text: String,
+    /// The color to render the value text in.
+    pub color: Color,
+    /// Whether the row should be highlighted.
+    pub highlight: bool,
+}
+
+impl<E> PerfUiWidget<E> for E
+where
+    E: PerfUiEntry + Clone + Send + Sync + 'static,
+{
+    type Data = SimpleRowData;
+
+    fn entry(&self) -> &E {
+        self
+    }
+
+    fn make_data(
+        &self,
+        root: &PerfUiRoot,
+        param: &mut <E::SystemParam as SystemParam>::Item<'_, '_>,
+    ) -> Self::Data {
+        if let Some(value) = self.update_value(param) {
+            Self::Data {
+                text: self.format_value(&value).trim().to_owned(),
+                color: self.value_color(&value).unwrap_or(root.default_value_color),
+                highlight: self.value_highlight(&value),
+            }
+        } else {
+            Self::Data {
+                text: root.text_err.trim().to_owned(),
+                color: root.err_color,
+                highlight: false,
+            }
+        }
+    }
+
+    fn natural_width(
+        &self,
+        root: &PerfUiRoot,
+        fonts: &PerfUiRowFonts,
+        data: &Self::Data,
+        cached: Option<f32>,
+        measure: &mut dyn FnMut(&str, &egui::FontId) -> f32,
+    ) -> f32 {
+        let label_part = if root.display_labels {
+            measure(
+                &format!("{}:", self.label()),
+                &fonts.label_font_id(root.fontsize_label),
+            ) + 2.0 * LABEL_PADDING
+        } else {
+            0.0
+        };
+        let value_w = measure(
+            &data.text,
+            &fonts.value_font_id(root.fontsize_value, data.highlight),
+        );
+        let col_part = (value_w + 2.0 * VALUE_PADDING).max(root.values_col_width);
+        (label_part + col_part).max(cached.unwrap_or(0.0))
+    }
+
+    fn render(
+        &self,
+        root: &PerfUiRoot,
+        ui: &mut egui::Ui,
+        row: &PerfUiRowCtx<'_>,
+        data: &Self::Data,
+    ) -> f32 {
+        let highlight = data.highlight;
+        let value_font = row.fonts.value_font_id(root.fontsize_value, highlight);
+
+        let response = perf_ui_row(
+            ui,
+            root,
+            row,
+            highlight,
+            Some(self.label()),
+            &mut |ui| {
+                let value_w = measure_text(ui, &data.text, &value_font);
+                let col_part = (value_w + 2.0 * VALUE_PADDING).max(root.values_col_width);
+                ui.horizontal(|ui| {
+                    // Right-align the value inside the values column:
+                    ui.add_space((col_part - value_w - VALUE_PADDING).max(0.0));
+                    ui.label(
+                        egui::RichText::new(&data.text)
+                            .size(root.fontsize_value)
+                            .color(to_egui_color(data.color))
+                            .font(value_font.clone()),
+                    );
+                    ui.add_space(VALUE_PADDING);
+                });
+            },
+        );
+        row_natural_width(&response, root, row)
     }
 }

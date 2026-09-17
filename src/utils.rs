@@ -319,3 +319,18 @@ pub fn format_pretty_time_hms(precision: u8, h: u32, m: u32, s: u32, nanos: u32)
         }
     }
 }
+
+/// Convert a Bevy [`Color`] into an egui [`egui::Color32`].
+///
+/// NOTE: egui's [`egui::Color32`] uses *premultiplied* alpha, so the
+/// RGB channels are multiplied by the alpha value before conversion.
+pub fn to_egui_color(color: Color) -> egui::Color32 {
+    let s = color.to_srgba();
+    let a = s.alpha;
+    egui::Color32::from_rgba_premultiplied(
+        (s.red * a * 255.0).round() as u8,
+        (s.green * a * 255.0).round() as u8,
+        (s.blue * a * 255.0).round() as u8,
+        (a * 255.0).round() as u8,
+    )
+}
