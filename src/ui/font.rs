@@ -103,11 +103,7 @@ pub(crate) fn update_perf_ui_fonts(
     let mut to_register: Vec<(AssetId<Font>, Vec<u8>)> = Vec::new();
     let mut seen: HashSet<AssetId<Font>> = HashSet::new();
     for root in q_roots.iter() {
-        for handle in [
-            &root.font_label,
-            &root.font_value,
-            &root.font_highlight,
-        ] {
+        for handle in [&root.font_label, &root.font_value, &root.font_highlight] {
             let id = handle.id();
             // The default handle (`Handle::default()`, id = `AssetId::default()`)
             // resolves to Bevy's built-in default font asset. Roots that do not

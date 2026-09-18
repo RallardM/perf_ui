@@ -58,9 +58,9 @@
 //!
 //! ---
 //!
-//! Each frame, in the [`Update`](bevy::prelude::Update) schedule, the
+//! Each frame, in the [`Update`] schedule, the
 //! [`PerfUiSet::Update`] systems compute the per-frame data of every widget
-//! and prepare its drawing as a callback in a [`PerfUiRenderData`] resource.
+//! and prepare its drawing as a callback in a `PerfUiRenderData` resource.
 //! The renderer then runs inside [`bevy_egui::EguiPrimaryContextPass`] and
 //! draws one egui area per [`PerfUiRoot`].
 
@@ -121,10 +121,7 @@ impl Plugin for PerfUiPlugin {
         app.init_resource::<PerfUiNaturalWidths>();
 
         app.configure_sets(Update, (PerfUiSet::Setup, PerfUiSet::Update));
-        app.add_systems(
-            Update,
-            clear_perf_ui_data.before(PerfUiSet::Update),
-        );
+        app.add_systems(Update, clear_perf_ui_data.before(PerfUiSet::Update));
 
         // The actual egui rendering happens within the schedule provided by bevy_egui
         app.add_systems(EguiPrimaryContextPass, render_perf_ui);
@@ -231,21 +228,13 @@ struct PreparedWidget {
     natural_width: f32,
     /// Measure this widget's natural row width (see
     /// [`PerfUiWidget::natural_width`]).
-    measure: Box<
-        dyn Fn(
-                &egui::Context,
-                &PerfUiRowFonts,
-                Option<f32>,
-                &PerfUiRoot,
-            ) -> f32
-            + Send
-            + Sync,
-    >,
+    measure:
+        Box<dyn Fn(&egui::Context, &PerfUiRowFonts, Option<f32>, &PerfUiRoot) -> f32 + Send + Sync>,
     /// Draw this widget's row; returns the natural width of the drawn row.
     draw: Box<dyn Fn(&PerfUiRoot, &mut egui::Ui, &PerfUiRowCtx<'_>) -> f32 + Send + Sync>,
 }
 
-/// Wrapper [`SystemParam`](bevy::ecs::system::SystemParam) that provides access
+/// Wrapper [`SystemParam`] that provides access
 /// to the custom system params item of an entry type.
 pub(crate) struct EntryUpdater<'w, 's, E: PerfUiEntry> {
     params: <E::SystemParam as SystemParam>::Item<'w, 's>,
@@ -341,9 +330,7 @@ pub(crate) fn update_perf_ui_widget<E: PerfUiEntry, W: PerfUiWidget<E>>(
         let widget_m = widget.clone();
         let data_m = data.clone();
         let measure: Box<
-            dyn Fn(&egui::Context, &PerfUiRowFonts, Option<f32>, &PerfUiRoot) -> f32
-                + Send
-                + Sync,
+            dyn Fn(&egui::Context, &PerfUiRowFonts, Option<f32>, &PerfUiRoot) -> f32 + Send + Sync,
         > = Box::new(move |ctx, fonts, cached, root| {
             widget_m.natural_width(
                 root,
@@ -505,7 +492,7 @@ pub(crate) fn render_perf_ui(
                         });
                     });
             });
-        }
+    }
 
     widths.map = new_widths;
 }

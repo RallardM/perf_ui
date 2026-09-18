@@ -119,7 +119,9 @@ pub fn perf_ui_row(
         .inner_margin(root.inner_padding)
         .show(ui, |ui| {
             ui.horizontal(|ui| {
-                if root.display_labels && let Some(label) = label {
+                if root.display_labels
+                    && let Some(label) = label
+                {
                     ui.horizontal(|ui| {
                         ui.add_space(LABEL_PADDING);
                         ui.label(
@@ -294,28 +296,21 @@ where
         let highlight = data.highlight;
         let value_font = row.fonts.value_font_id(root.fontsize_value, highlight);
 
-        let response = perf_ui_row(
-            ui,
-            root,
-            row,
-            highlight,
-            Some(self.label()),
-            &mut |ui| {
-                let value_w = measure_text(ui, &data.text, &value_font);
-                let col_part = (value_w + 2.0 * VALUE_PADDING).max(root.values_col_width);
-                ui.horizontal(|ui| {
-                    // Right-align the value inside the values column:
-                    ui.add_space((col_part - value_w - VALUE_PADDING).max(0.0));
-                    ui.label(
-                        egui::RichText::new(&data.text)
-                            .size(root.fontsize_value)
-                            .color(to_egui_color(data.color))
-                            .font(value_font.clone()),
-                    );
-                    ui.add_space(VALUE_PADDING);
-                });
-            },
-        );
+        let response = perf_ui_row(ui, root, row, highlight, Some(self.label()), &mut |ui| {
+            let value_w = measure_text(ui, &data.text, &value_font);
+            let col_part = (value_w + 2.0 * VALUE_PADDING).max(root.values_col_width);
+            ui.horizontal(|ui| {
+                // Right-align the value inside the values column:
+                ui.add_space((col_part - value_w - VALUE_PADDING).max(0.0));
+                ui.label(
+                    egui::RichText::new(&data.text)
+                        .size(root.fontsize_value)
+                        .color(to_egui_color(data.color))
+                        .font(value_font.clone()),
+                );
+                ui.add_space(VALUE_PADDING);
+            });
+        });
         row_natural_width(&response, root, row)
     }
 }

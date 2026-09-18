@@ -12,8 +12,8 @@ use bevy::prelude::*;
 use crate::entry::{PerfUiEntry, PerfUiEntryDisplayRange};
 use crate::ui::root::PerfUiRoot;
 use crate::ui::widget::{
-    measure_text, perf_ui_row, row_natural_width, PerfUiRowCtx, PerfUiRowFonts, PerfUiWidget,
-    LABEL_PADDING, VALUE_PADDING,
+    LABEL_PADDING, PerfUiRowCtx, PerfUiRowFonts, PerfUiWidget, VALUE_PADDING, measure_text,
+    perf_ui_row, row_natural_width,
 };
 use crate::utils::{ColorGradient, to_egui_color};
 
@@ -289,9 +289,9 @@ where
                     }
 
                     let overlay_text = match self.text_position {
-                        BarTextPosition::Center
-                        | BarTextPosition::Start
-                        | BarTextPosition::End => Some(data.text.as_str()),
+                        BarTextPosition::Center | BarTextPosition::Start | BarTextPosition::End => {
+                            Some(data.text.as_str())
+                        }
                         _ => None,
                     };
 
@@ -348,10 +348,8 @@ where
             .unwrap_or(root.fontsize_value * 1.6)
             .max(6.0);
 
-        let (rect, _response) = ui.allocate_exact_size(
-            egui::vec2(bar_width, height),
-            egui::Sense::hover(),
-        );
+        let (rect, _response) =
+            ui.allocate_exact_size(egui::vec2(bar_width, height), egui::Sense::hover());
         let painter = ui.painter();
 
         painter.rect_filled(rect, 0.0, to_egui_color(self.bar_background));
@@ -365,12 +363,14 @@ where
         let pct = data.fill_pct.clamp(0.0, 1.0);
         let inner_width = inner.width().max(0.0);
         let fill_rect = match self.fill_direction {
-            BarFillDirection::Left => {
-                egui::Rect::from_min_max(inner.min, egui::pos2(inner.min.x + inner_width * pct, inner.max.y))
-            }
-            BarFillDirection::Right => {
-                egui::Rect::from_min_max(egui::pos2(inner.max.x - inner_width * pct, inner.min.y), inner.max)
-            }
+            BarFillDirection::Left => egui::Rect::from_min_max(
+                inner.min,
+                egui::pos2(inner.min.x + inner_width * pct, inner.max.y),
+            ),
+            BarFillDirection::Right => egui::Rect::from_min_max(
+                egui::pos2(inner.max.x - inner_width * pct, inner.min.y),
+                inner.max,
+            ),
             BarFillDirection::Center => {
                 let center = inner.center().x;
                 let half = inner_width * pct * 0.5;
