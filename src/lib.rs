@@ -69,6 +69,7 @@
 #![allow(clippy::collapsible_else_if)]
 
 use std::borrow::Cow;
+use std::collections::HashMap;
 use std::sync::Arc;
 
 use bevy::ecs::change_detection::Tick;
@@ -79,6 +80,7 @@ use bevy::prelude::*;
 use bevy_egui::{EguiContexts, EguiPrimaryContextPass};
 
 use crate::entry::PerfUiEntry;
+use crate::ui::font::{PerfUiFontState, row_fonts_for, update_perf_ui_fonts};
 use crate::ui::root::{PerfUiPosition, PerfUiRoot};
 use crate::ui::widget::{PerfUiRowCtx, PerfUiRowFonts, PerfUiWidget};
 use crate::utils::to_egui_color;
@@ -115,6 +117,8 @@ impl Plugin for PerfUiPlugin {
         }
 
         app.init_resource::<PerfUiRenderData>();
+        app.init_resource::<PerfUiFontState>();
+        app.init_resource::<PerfUiNaturalWidths>();
 
         app.configure_sets(Update, (PerfUiSet::Setup, PerfUiSet::Update));
         app.add_systems(
@@ -195,11 +199,32 @@ pub(crate) struct PerfUiRenderData {
     entries: Vec<PreparedWidget>,
 }
 
+/// Resource holding the natural width of every widget row, as *drawn* in the
+/// previous rendered frame.
+///
+/// Written by the renderer after drawing, and provided to
+/// [`PerfUiWidget::natural_width`](crate::ui::widget::PerfUiWidget) as the
+/// `cached` measurement in the next frame's measurement pre-pass. This is
+/// what allows fully custom widgets (whose natural width is only known from
+/// their actual drawing) to participate in the panel-width computation.
+#[derive(Resource, Default)]
+pub(crate) struct PerfUiNaturalWidths {
+    /// Natural width, keyed by `(root entity, widget sort key)`.
+    ///
+    /// The sort key (not the widget entity!) must be used as the key: entry
+    /// bundles spawn many widget components on the *same* entity, so the
+    /// entity is not unique per widget, and sharing one cache slot between
+    /// them would mix up their widths.
+    map: HashMap<(Entity, i32), f32>,
+}
+
 /// A single widget, prepared for rendering with egui.
 struct PreparedWidget {
     /// The entity holding the [`PerfUiRoot`] this widget belongs to.
     root_entity: Entity,
     /// The sort key of the widget (see [`PerfUiWidget::sort_key`]).
+    ///
+    /// Also used as the per-widget key into [`PerfUiNaturalWidths`].
     sort: i32,
     /// The natural width of this widget's row, measured by the renderer
     /// in the pre-pass each frame (before any drawing happens).
@@ -219,10 +244,6 @@ struct PreparedWidget {
     /// Draw this widget's row; returns the natural width of the drawn row.
     draw: Box<dyn Fn(&PerfUiRoot, &mut egui::Ui, &PerfUiRowCtx<'_>) -> f32 + Send + Sync>,
 }
-
-/// Resource mapping the custom fonts of [`PerfUiRoot`]s (given as
-/// [`Handle<Font>`]) to the font names they have been registered under in
-/// egui's font definitions.
 
 /// Wrapper [`SystemParam`](bevy::ecs::system::SystemParam) that provides access
 /// to the custom system params item of an entry type.
@@ -358,14 +379,23 @@ pub(crate) fn update_perf_ui_widget<E: PerfUiEntry, W: PerfUiWidget<E>>(
 /// Runs inside [`bevy_egui::EguiPrimaryContextPass`], after the
 /// [`PerfUiSet::Update`] systems have prepared the widget data.
 ///
-/// For each [`PerfUiRoot`], this performs a measurement pre-pass (using font
-/// metrics, and a cache of previously-drawn custom widget widths) to compute
-/// the natural width of every row, and the resulting panel width; then draws
-/// all rows, filling them with flex space so that all rows of a panel have
-/// exactly the same width (like the original, bevy_ui-based implementation).
+/// First, the custom fonts configured in the [`PerfUiRoot`]s are registered
+/// into egui (see [`update_perf_ui_fonts`]); rows keep using egui's default
+/// proportional font until a font has actually been activated.
+///
+/// For each [`PerfUiRoot`], this then performs a measurement pre-pass (using
+/// font metrics, and a cache of previously-drawn custom widget widths, see
+/// [`PerfUiNaturalWidths`]) to compute the natural width of every row, and
+/// the resulting panel width; then draws all rows, filling them with flex
+/// space so that all rows of a panel have exactly the same width (like the
+/// original, bevy_ui-based implementation). The widths of the drawn rows
+/// become the cached measurements for the next frame.
 pub(crate) fn render_perf_ui(
     mut contexts: EguiContexts,
     mut render_data: ResMut<PerfUiRenderData>,
+    mut font_state: ResMut<PerfUiFontState>,
+    font_assets: Res<Assets<Font>>,
+    mut widths: ResMut<PerfUiNaturalWidths>,
     q_roots: Query<&PerfUiRoot>,
 ) {
     if render_data.entries.is_empty() {
@@ -375,6 +405,11 @@ pub(crate) fn render_perf_ui(
     let Ok(ctx) = contexts.ctx_mut() else {
         return;
     };
+
+    // Register custom fonts of all roots into egui, and promote previously
+    // registered fonts whose definitions have been activated at an egui pass
+    // boundary. From here on, only activated fonts are handed out.
+    update_perf_ui_fonts(ctx, &mut font_state, &font_assets, &q_roots);
 
     let entries = &mut render_data.entries;
 
@@ -390,6 +425,11 @@ pub(crate) fn render_perf_ui(
             .then_with(|| entries[a].root_entity.cmp(&entries[b].root_entity))
             .then_with(|| entries[a].sort.cmp(&entries[b].sort))
     });
+
+    // Natural widths of the rows drawn this frame; these become the `cached`
+    // measurements for the next frame (replacing the map entirely, so widths
+    // of despawned widgets disappear).
+    let mut new_widths: HashMap<(Entity, i32), f32> = HashMap::with_capacity(entries.len());
 
     let mut idx = 0;
     while idx < order.len() {
@@ -407,13 +447,15 @@ pub(crate) fn render_perf_ui(
         };
         let root = root.clone();
 
-        // Row fonts: no custom fonts registered for now (fallback to proportional)
-        let row_fonts = PerfUiRowFonts::default();
+        // Row fonts: the activated egui font names for this root's custom
+        // fonts (if any); unset/not-yet-active ones use the proportional font.
+        let row_fonts = row_fonts_for(&font_state, &root);
 
         // Pre-pass: measure the natural width of every row of this panel.
         let mut panel_width = 0.0f32;
         for &i in &group {
-            let natural = (entries[i].measure)(ctx, &row_fonts, None, &root);
+            let cached = widths.map.get(&(root_entity, entries[i].sort)).copied();
+            let natural = (entries[i].measure)(ctx, &row_fonts, cached, &root);
             entries[i].natural_width = natural;
             panel_width = panel_width.max(natural);
         }
@@ -434,8 +476,6 @@ pub(crate) fn render_perf_ui(
         } else {
             egui::Layout::top_down(egui::Align::Min)
         };
-
-        let mut drawn: Vec<(i32, f32)> = Vec::with_capacity(group.len());
 
         egui::Area::new(egui::Id::new(("perf_ui", root_entity)))
             .anchor(root.egui_anchor(), offset)
@@ -460,12 +500,14 @@ pub(crate) fn render_perf_ui(
                                     fonts: &row_fonts,
                                 };
                                 let natural = (entries[i].draw)(&root, ui, &row);
-                                drawn.push((entries[i].sort, natural));
+                                new_widths.insert((root_entity, entries[i].sort), natural);
                             }
                         });
                     });
             });
         }
+
+    widths.map = new_widths;
 }
 
 /// Helper: get the drawing z-index of the root with the given entity,

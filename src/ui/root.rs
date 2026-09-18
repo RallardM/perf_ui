@@ -120,9 +120,12 @@ pub struct PerfUiRoot {
     /// The font to use for labels.
     ///
     /// Loaded automatically: once the font asset is loaded, it is registered
-    /// into egui's font definitions and used for rendering.
-    /// Until then (or if the asset is not available), egui's default font is
-    /// used.
+    /// into egui's font definitions and used for measuring and rendering
+    /// label text.
+    /// Until then (or if the asset is not available), egui's default
+    /// proportional font is used. Registering/activating the font in egui
+    /// takes one additional frame after the asset has been loaded, so the
+    /// very first frames may still use the fallback font.
     pub font_label: Handle<Font>,
     /// The font to use for values.
     ///

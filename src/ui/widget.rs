@@ -45,10 +45,8 @@ impl PerfUiRowFonts {
     ///
     /// If `highlight` is true and a highlight font is registered, it is used.
     pub fn value_font_id(&self, size: f32, highlight: bool) -> egui::FontId {
-        if highlight {
-            if let Some(name) = &self.highlight {
-                return egui::FontId::new(size, egui::FontFamily::Name(name.clone().into()));
-            }
+        if highlight && let Some(name) = &self.highlight {
+            return egui::FontId::new(size, egui::FontFamily::Name(name.clone().into()));
         }
         match &self.value {
             Some(name) => egui::FontId::new(size, egui::FontFamily::Name(name.clone().into())),
@@ -121,19 +119,17 @@ pub fn perf_ui_row(
         .inner_margin(root.inner_padding)
         .show(ui, |ui| {
             ui.horizontal(|ui| {
-                if root.display_labels {
-                    if let Some(label) = label {
-                        ui.horizontal(|ui| {
-                            ui.add_space(LABEL_PADDING);
-                            ui.label(
-                                egui::RichText::new(format!("{label}:"))
-                                    .size(root.fontsize_label)
-                                    .color(to_egui_color(root.label_color))
-                                    .font(row.fonts.label_font_id(root.fontsize_label)),
-                            );
-                            ui.add_space(LABEL_PADDING);
-                        });
-                    }
+                if root.display_labels && let Some(label) = label {
+                    ui.horizontal(|ui| {
+                        ui.add_space(LABEL_PADDING);
+                        ui.label(
+                            egui::RichText::new(format!("{label}:"))
+                                .size(root.fontsize_label)
+                                .color(to_egui_color(root.label_color))
+                                .font(row.fonts.label_font_id(root.fontsize_label)),
+                        );
+                        ui.add_space(LABEL_PADDING);
+                    });
                 }
                 ui.horizontal(|ui| {
                     ui.add_space(flex_pad);
@@ -172,7 +168,11 @@ pub trait PerfUiWidget<E: PerfUiEntry>: Component + Clone + Send + Sync + 'stati
     ///
     /// - `fonts`: the registered egui fonts for this Perf UI.
     /// - `cached`: a cached natural width, measured from the rows that were
-    ///   actually drawn in previous frames (if any).
+    ///   actually drawn in the previous frame (if any). Only meaningful for
+    ///   widgets whose natural width cannot be computed from font metrics
+    ///   alone; implementations that measure exactly (like the built-in text
+    ///   rows) must ignore it — a stale cached width would inflate the row's
+    ///   natural width and break the right-alignment of the values.
     /// - `measure`: a callback to measure the width of a text string with a
     ///   given egui font.
     ///
@@ -263,7 +263,7 @@ where
         root: &PerfUiRoot,
         fonts: &PerfUiRowFonts,
         data: &Self::Data,
-        cached: Option<f32>,
+        _cached: Option<f32>,
         measure: &mut dyn FnMut(&str, &egui::FontId) -> f32,
     ) -> f32 {
         let label_part = if root.display_labels {
@@ -279,7 +279,9 @@ where
             &fonts.value_font_id(root.fontsize_value, data.highlight),
         );
         let col_part = (value_w + 2.0 * VALUE_PADDING).max(root.values_col_width);
-        (label_part + col_part).max(cached.unwrap_or(0.0))
+        // Measured exactly from the font metrics: the cached width is
+        // deliberately not used here (see the trait docs).
+        label_part + col_part
     }
 
     fn render(

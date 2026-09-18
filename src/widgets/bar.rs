@@ -220,7 +220,7 @@ where
         root: &PerfUiRoot,
         fonts: &PerfUiRowFonts,
         data: &Self::Data,
-        cached: Option<f32>,
+        _cached: Option<f32>,
         measure: &mut dyn FnMut(&str, &egui::FontId) -> f32,
     ) -> f32 {
         let label_part = if root.display_labels {
@@ -241,7 +241,9 @@ where
             0.0
         };
         let col_part = (bar_w + outside_text_w + 2.0 * VALUE_PADDING).max(root.values_col_width);
-        (label_part + col_part).max(cached.unwrap_or(0.0))
+        // Measured exactly from the font metrics: the cached width is
+        // deliberately not used here (see the `PerfUiWidget` trait docs).
+        label_part + col_part
     }
 
     fn render(
